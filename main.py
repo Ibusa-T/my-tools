@@ -51,6 +51,19 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             # 5. 【重要】処理が終わった一時ファイルを削除（ストレージ圧迫防止）
             self.cleanup_files([input_filename, output_filename])
 
+    def do_GET(self):
+        """ヘルスチェック用 (Renderなどの監視サービスに対応)"""
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.end_headers()
+        self.wfile.write("<h1>Guardian Voice API</h1><p>Status: Running</p>".encode('utf-8'))
+
+    def do_HEAD(self):
+        """ヘルスチェック用 (Renderなどの監視サービスに対応)"""
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.end_headers()
+
     async def process_ai(self, in_file, out_file):
         """タイムスタンプ付きファイルを使用して推論"""
         try:
@@ -80,8 +93,9 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             await communicate.save(out_file)
             
             with open(out_file, "rb") as f:
-                print(f.read())
-                return f.read()
+                audio_data = f.read()
+                print(f"[{out_file}] 音声データ取得完了 ({len(audio_data)} bytes)")
+                return audio_data
 
         except Exception as e:
             print(f"❌ 処理エラー: {e}")
