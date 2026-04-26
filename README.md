@@ -10,21 +10,18 @@ Render にデプロイする際は、以下の設定を使用してください�
 Render のダッシュボードから **New > Web Service** を選択し、このリポジトリを連携してください。
 
 ### 2. ビルド設定 (Build Command)
-`uv` をインストールし、依存関係を同期します。
+依存関係をインストールします。
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh && $HOME/.local/bin/uv sync
+pip install -r requirements.txt
 ```
 
 ### 3. 起動設定 (Start Command)
-`uv run` を使用してサーバーを起動します。
+サーバーを起動します。
 
 ```bash
-$HOME/.local/bin/uv run python main.py
+python main.py
 ```
-
-> [!TIP]
-> Render の **Python Version** 設定は、デフォルトのままでも `.python-version` ファイルの内容が優先されますが、デプロイ時にエラーが出る場合は `3.12` 等の安定版への変更を検討してください。
 
 ### 4. 環境変数 (Environment Variables)
 以下の環境変数を Render のダッシュボードで設定してください。
