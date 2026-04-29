@@ -104,6 +104,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                                      ,'ai_text':ai_text
                                      ,'audio_data':audio_data}
                 return json.dumps(result)
+        
         except Exception as e:
             response_body={'tesult':'❌ 処理エラー'
                                      ,'err_text':e}
