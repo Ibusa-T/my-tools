@@ -6,6 +6,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
 from groq import Groq
 import edge_tts
+import json
+import base64
 
 # 環境変数の読み込み
 load_dotenv()
@@ -18,9 +20,11 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
           # これはrenderのパスに置き換え
         if self.path == '/voice':
             # 1. 現在時刻からタイムスタンプを生成 (例: 20260426_220505)
+            
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             input_filename = f"input_{timestamp}.m4a"
             output_filename = f"response_{timestamp}.mp3"
+    
 
             # 2. iPhoneから送られてきた音声バイナリを取得
             content_length = int(self.headers.get('Content-Length', 0))
@@ -76,7 +80,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                     language="ja"
                 )
             print(f"[{in_file}] あなた: {user_text}")
-
+            response_body['user_text'] = user_text
             # B. Groq LLM (Guardian)
             chat_completion = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
@@ -87,19 +91,25 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             )
             ai_text = chat_completion.choices[0].message.content
             print(f"[{out_file}] AI: {ai_text}")
-
+            response_body['ai_text'] = ai_text
             # C. Edge TTS
             communicate = edge_tts.Communicate(ai_text, "ja-JP-NanamiNeural")
             await communicate.save(out_file)
             
             with open(out_file, "rb") as f:
                 audio_data = f.read()
+                audio_base64=b64.encode(audio_data)
                 print(f"[{out_file}] 音声データ取得完了 ({len(audio_data)} bytes)")
-                return audio_data
-
+                response_body={'user_text':user_text
+                                     ,'ai_text':ai_text
+                                     ,'audio_data':audio_data}
+                return json.dumps(result)
         except Exception as e:
+            response_body={'tesult':'❌ 処理エラー'
+                                     ,'err_text':e}
+                
             print(f"❌ 処理エラー: {e}")
-            return None
+            return json.dumps(result)
 
     def cleanup_files(self, files):
         """使用済みのファイルを削除"""
