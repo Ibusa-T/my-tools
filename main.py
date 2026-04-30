@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from groq import Groq
 import edge_tts
 import prompts
+import cgi
 # # 今uv addしたらロックかかってるから後で挑戦
 # import parser
 # 環境変数の読み込み
