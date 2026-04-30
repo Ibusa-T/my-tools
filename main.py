@@ -4,7 +4,6 @@ import asyncio
 import time
 import json
 import base64
-import cgi  # Multipart解析用（Python 3.13で廃止予定だが現時点では必須）
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
 from groq import Groq
