@@ -9,10 +9,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
 from groq import Groq
 import edge_tts
-
+import prompts
+# # 今uv addしたらロックかかってるから後で挑戦
+# import parser
 # 環境変数の読み込み
 load_dotenv()
-
+#プロンプト
+system_prompt = prompts.get_system_prompt()
 # クライアントの初期化
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
@@ -41,7 +44,8 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                     headers=self.headers,
                     environ={'REQUEST_METHOD': 'POST'}
                 )
-
+             
+             
                 # Swift側で指定したキー名で取得
                 history_json = form.getvalue("history") or "[]"
                 audio_field = form["audio"]
@@ -92,8 +96,9 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 ).text
 
             # B. Llamaへのプロンプト組み立て
-            messages = [{"role": "system", "content": "あなたは投資アシスタントです。簡潔に回答してください。"}]
+            messages = [{"role": "system", "content": system_prompt}]
             messages.extend(history)
+            #音声をテキストに変換したら履歴に追加
             messages.append({"role": "user", "content": user_text})
 
             # C. Llamaによる回答生成
@@ -102,6 +107,8 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 messages=messages
             )
             ai_text = chat.choices[0].message.content
+            # AIの回答も履歴に追加
+            history.append({"role": "assistant", "content": ai_text})
 
             # D. Edge TTSによる音声合成
             await edge_tts.Communicate(ai_text, "ja-JP-NanamiNeural").save(out_file)
