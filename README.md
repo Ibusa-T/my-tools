@@ -1,7 +1,9 @@
 # Guardian Voice API (my-tools)
-## ブランチの説明
-  -main  -- プロジェクト本番
-  -dev 　--現在稼働中のプロジェクト用
+## ブランチの説明p
+  -main  -- プロジェクト本番  
+  -dev 　--現在稼働中のプロジェクト用  
+  -default -- すべてのプロジェクトのテンプレート
+  
 このプロジェクトは、Groq (Whisper/Llama) と Edge-TTS を使用した音声対話エージェントのAPIサーバーです。
 
 ## Render へのデプロイ設定
