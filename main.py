@@ -8,17 +8,80 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
 from groq import Groq
 import edge_tts
-import prompts
-# # 今uv addしたらロックかかってるから後で挑戦
-# import parser
+import cgi
+from difflib import get_close_matches
+#プロンプト
+
+SYSTEM_BASE = "あなたはユーザーの思考を深めるインタビュアーです。"
+
+CONSTRAINTS = """
+- 1〜2文で簡潔に話してください。
+- オウム返しするより、あなたの意見や感想を述べることに集中してください。
+- 相手の話が長くても、最後まで話を聞いてください
+"""
+
+BEHAVIOR_LOGIC = """
+# 相手の話題に対して、必ず以下のいずれかを行ってください
+-「相手が答えやすくなる具体的な質問」
+-「独自の視点」から新しい提案
+
+# 相手が明確に以下のキーワードを使ったとき、「本日の会話は以上です。お疲れ様でした。」と一言添えて終了してください。
+- 「もう大丈夫」
+- 「今日は終わり」
+
+"""
+
+def get_system_prompt():
+    return f"{SYSTEM_BASE}\n\n【制約】{CONSTRAINTS}\n\n【思考プロセス】{BEHAVIOR_LOGIC}"
+system_prompt = get_system_prompt()
+# RAG
+"""インメモリDB"""
+INTENTS_DB = {
+    "playMusic":{
+    "intent_name": "playMusic",
+    "summary": "ミュージックアプリで楽曲やプレイリストを再生する",
+    "parameters": [
+      {
+        "name": "song_name",
+        "type": "String",
+        "description": "CRICIS"
+      },
+      {
+        "name": "artist_name",
+        "type": "String",
+        "description": "acidBlackCherry"
+      },
+      {
+        "name": "playlist_name",
+        "type": "String",
+        "description": "トップ25"
+      }
+    ],
+    "usage_example": [
+      "音楽をかけて",
+      "L'Arc~en~Cielの曲を再生して",
+      "リラックスできるプレイリストを流して"
+    ],
+    "swift_action": "PlayMusicIntent"
+    }
+}
+
+
 # 環境変数の読み込み
 load_dotenv()
-#プロンプト
-system_prompt = prompts.get_system_prompt()
+
 # クライアントの初期化
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 class VoiceAgentHandler(BaseHTTPRequestHandler):
+    
+    def search_intent(self, query: str) -> dict:
+        """インメモリでのあいまい検索処理"""
+        keys = list(INTENTS_DB.keys())
+        matches = get_close_matches(query, keys, n=1, cutoff=0.3)
+        if matches:
+            return INTENTS_DB[matches[0]]
+        return {}
     
     # 1. ヘルスチェック・ブラウザアクセス用
     def do_GET(self):
@@ -44,14 +107,15 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                     environ={'REQUEST_METHOD': 'POST'}
                 )
              
-             
                 # Swift側で指定したキー名で取得
                 history_json = form.getvalue("history") or "[]"
                 audio_field = form["audio"]
-                
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                in_file = f"in_{timestamp}.m4a"
-                out_file = f"out_{timestamp}.mp3"
+
+                temp_file = self.temp_file()
+                #送られてきた音声データ
+                in_file = temp_file['in']
+                # 読み上げ音声を保存するファイル
+                out_file = temp_file['out']
 
                 # 送られてきた音声バイナリを一時ファイルに保存
                 with open(in_file, "wb") as f:
@@ -72,13 +136,41 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 self.wfile.write(response_json_str.encode('utf-8'))
 
                 # 一時ファイルの削除
-                for f in [in_file, out_file]:
-                    if os.path.exists(f):
-                        os.remove(f)
+                self.__rm_f(in_file, out_file)
             
             except Exception as e:
                 print(f"❌ Server Error: {e}")
                 self.send_error(500, str(e))
+    
+    def temp_file(self):
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        in_file = f"in_{timestamp}.m4a"
+        out_file = f"out_{timestamp}.mp3"
+
+        return {'in':in_file,'out':out_file}
+
+    def __rm_f(self, in_file, out_file):
+        # 一時ファイルの削除
+        for f in [in_file, out_file]:
+            if os.path.exists(f):
+                os.remove(f)
+
+    """送られてきた音声を処理する"""
+    def parse_voice_request(body, boundary):
+        # boundaryを区切り文字として分割
+        parts = body.split(b'--' + boundary)
+        history = "{}"
+        audio = None
+        
+        for part in parts:
+            if b'name="history"' in part:
+                # ヘッダーとボディの間の空行(\r\n\r\n)で分割して中身を取る
+                history = part.split(b'\r\n\r\n')[1].strip(b'\r\n--').decode('utf-8')
+            elif b'name="audio"' in part:
+                audio = part.split(b'\r\n\r\n')[1].rstrip(b'\r\n--')
+                
+        return history, audio
+ 
 
     async def process_ai(self, in_file, out_file, history_json):
         """履歴を考慮した推論ロジック"""
@@ -93,19 +185,66 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                     model="whisper-large-v3-turbo",
                     language="ja"
                 ).text
+            # あいまい検索
+            matched_intent = self.search_intent(user_text)
 
-            # B. Llamaへのプロンプト組み立て
+            # B.初期プロンプト組み立て
             messages = [{"role": "system", "content": system_prompt}]
             messages.extend(history)
-            #音声をテキストに変換したら履歴に追加
             messages.append({"role": "user", "content": user_text})
 
+            tools = []
+            if matched_intent:
+                properties = {}
+                for p in matched_intent.get("parameters", []):
+                    p_type = p.get("type", "string").lower()
+                    if p_type not in ["string", "number", "integer", "boolean", "array", "object"]:
+                        p_type = "string"
+                    properties[p["name"]] = {
+                        "type": p_type,
+                        "description": p.get("description", "")
+                    }
+                
+                tools = [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": matched_intent.get("swift_action", "IntentAction"),
+                            "description": matched_intent.get("summary", ""),
+                            "parameters": {
+                                "type": "object",
+                                "properties": properties
+                            }
+                        }
+                    }
+                ]
+
             # C. Llamaによる回答生成
-            chat = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=messages
-            )
-            ai_text = chat.choices[0].message.content
+            chat_kwargs = {
+                "model": "llama-3.3-70b-versatile",
+                "messages": messages,
+            }
+            if tools:
+                chat_kwargs["tools"] = tools
+                chat_kwargs["tool_choice"] = "auto"
+
+            chat = groq_client.chat.completions.create(**chat_kwargs)
+            message = chat.choices[0].message
+            
+            ai_text = message.content or ""
+            swift_action = ""
+            extracted_parameters = {}
+
+            if message.tool_calls:
+                tool_call = message.tool_calls[0]
+                swift_action = tool_call.function.name
+                try:
+                    extracted_parameters = json.loads(tool_call.function.arguments)
+                except:
+                    pass
+                if not ai_text:
+                    ai_text = "承知いたしました。操作を実行します。"
+
             # AIの回答も履歴に追加
             history.append({"role": "assistant", "content": ai_text})
 
@@ -120,7 +259,9 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             return json.dumps({
                 "user_text": user_text,
                 "ai_text": ai_text,
-                "audio_data": audio_b64
+                "audio_data": audio_b64,
+                "swift_action": swift_action,
+                "parameters": extracted_parameters
             })
         except Exception as e:
             return json.dumps({"user_text": "Error", "ai_text": str(e), "audio_data": ""})
