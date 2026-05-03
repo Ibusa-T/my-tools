@@ -140,7 +140,17 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             
             except Exception as e:
                 print(f"❌ Server Error: {e}")
-                self.send_error(500, str(e))
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                error_json = json.dumps({
+                    "user_text": "Error",
+                    "ai_text": f"Server Error: {str(e)}",
+                    "audio_data": "",
+                    "swift_action": "",
+                    "parameters": {}
+                })
+                self.wfile.write(error_json.encode('utf-8'))
     
     def temp_file(self):
         timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -264,7 +274,13 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 "parameters": extracted_parameters
             })
         except Exception as e:
-            return json.dumps({"user_text": "Error", "ai_text": str(e), "audio_data": ""})
+            return json.dumps({
+                "user_text": "Error",
+                "ai_text": f"AI Error: {str(e)}",
+                "audio_data": "",
+                "swift_action": "",
+                "parameters": {}
+            })
 
 def run_server():
     port = int(os.environ.get("PORT", 8000))
