@@ -45,22 +45,10 @@ INTENTS_DB = {
         "name": "song_name",
         "type": "String",
         "description": "CRICIS"
-      },
-      {
-        "name": "artist_name",
-        "type": "String",
-        "description": "acidBlackCherry"
-      },
-      {
-        "name": "playlist_name",
-        "type": "String",
-        "description": "トップ25"
       }
     ],
     "usage_example": [
-      "音楽をかけて",
-      "L'Arc~en~Cielの曲を再生して",
-      "リラックスできるプレイリストを流して"
+      "CRICISをかけて",
     ],
     "swift_action": "PlayMusicIntent"
     }
