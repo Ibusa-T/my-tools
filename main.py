@@ -273,7 +273,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 except:
                     print("エラーだよ〜〜〜")
                 
-                ai_text = "承知いたしました。"
+                # ai_text = "承知いたしました。"
 
             # AIの回答も履歴に追加
             history.append({"role": "assistant", "content": ai_text})
