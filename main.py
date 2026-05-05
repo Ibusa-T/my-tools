@@ -37,34 +37,67 @@ system_prompt = get_system_prompt()
 # RAG
 """インメモリDB"""
 INTENTS_DB = {
-    "playMusic":{
-    "intent_name": "playMusic",
-    "summary": "ミュージックアプリで楽曲やプレイリストを再生する",
-    "parameters": [
-      {
-        "name": "song_name",
-        "type": "String",
-        "description": "CRICIS"
-      },
-      {
-        "name": "artist_name",
-        "type": "String",
-        "description": "acidBlackCherry"
-      },
-      {
-        "name": "playlist_name",
-        "type": "String",
-        "description": "トップ25"
-      }
-    ],
-    "usage_example": [
-      "音楽をかけて",
-      "L'Arc~en~Cielの曲を再生して",
-      "リラックスできるプレイリストを流して"
-    ],
-    "swift_action": "PlayMusicIntent"
+    "playMusic": {
+        "summary": "ミュージックアプリで楽曲やプレイリストを再生する",
+        "parameters": [
+            {
+                "name": "song_name",
+                "type": "string",
+                "description": "再生したい曲名（例: CRICIS）"
+            },
+            {
+                "name": "artist_name",
+                "type": "string",
+                "description": "再生したいアーティスト名やグループ名（例: acidBlackCherry）"
+            },
+            {
+                "name": "playlist_name",
+                "type": "string",
+                "description": "再生したいプレイリスト名（例: トップ25）"
+            }
+        ],
+        "usage_example": [
+            "音楽をかけて",
+            "L'Arc~en~Cielの曲を再生して",
+            "リラックスできるプレイリストを流して"
+        ],
+        "swift_action": "PlayMusicIntent"
+    },
+    "setReminder": {
+        "summary": "リマインダーや予定を追加する",
+        "parameters": [
+            {
+                "name": "title",
+                "type": "string",
+                "description": "リマインダーの内容やタイトル"
+            },
+            {
+                "name": "target_time",
+                "type": "string",
+                "description": "リマインダーを設定する日時や時刻（例: 15:00、明日）"
+            }
+        ],
+        "usage_example": [
+            "リマインダーを追加して",
+            "15時に会議の予定を入れて"
+        ],
+        "swift_action": "SetReminderIntent"
     }
 }
+class FileUtil:
+    @staticmethod
+    def temp_file():
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        in_file = f"in_{timestamp}.m4a"
+        out_file = f"out_{timestamp}.mp3"
+        
+        return {'in':in_file,'out':out_file}
+    @staticmethod
+    def __rm_f(in_file, out_file):
+        # 一時ファイルの削除
+        for f in [in_file, out_file]:
+            if os.path.exists(f):
+                os.remove(f)
 
 
 # 環境変数の読み込み
@@ -111,7 +144,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 history_json = form.getvalue("history") or "[]"
                 audio_field = form["audio"]
 
-                temp_file = self.temp_file()
+                temp_file = FileUtil.temp_file()
                 #送られてきた音声データ
                 in_file = temp_file['in']
                 # 読み上げ音声を保存するファイル
@@ -136,7 +169,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 self.wfile.write(response_json_str.encode('utf-8'))
 
                 # 一時ファイルの削除
-                self.__rm_f(in_file, out_file)
+                FileUtil.__rm_f(in_file, out_file)
             
             except Exception as e:
                 print(f"❌ Server Error: {e}")
@@ -152,19 +185,6 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 })
                 self.wfile.write(error_json.encode('utf-8'))
     
-    def temp_file(self):
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        in_file = f"in_{timestamp}.m4a"
-        out_file = f"out_{timestamp}.mp3"
-
-        return {'in':in_file,'out':out_file}
-
-    def __rm_f(self, in_file, out_file):
-        # 一時ファイルの削除
-        for f in [in_file, out_file]:
-            if os.path.exists(f):
-                os.remove(f)
-
     """送られてきた音声を処理する"""
     def parse_voice_request(body, boundary):
         # boundaryを区切り文字として分割
@@ -251,7 +271,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 try:
                     extracted_parameters = json.loads(tool_call.function.arguments)
                 except:
-                    pass
+                    print("エラーだよ〜〜〜")
                 if not ai_text:
                     ai_text = "承知いたしました。操作を実行します。"
 
