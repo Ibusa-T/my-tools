@@ -64,7 +64,7 @@ INTENTS_DB = {
         "swift_action": "PlayMusicIntent"
     },
     "setReminder": {
-        "summary": "リマインダーや予定を追加する",
+        "summary": "リマインダーに予定を追加する",
         "parameters": [
             {
                 "name": "title",
@@ -78,8 +78,7 @@ INTENTS_DB = {
             }
         ],
         "usage_example": [
-            "リマインダーを追加して",
-            "15時に会議の予定を入れて"
+            "リマインダーに予定を入れて"
         ],
         "swift_action": "SetReminderIntent"
     }
