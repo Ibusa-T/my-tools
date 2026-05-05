@@ -107,12 +107,13 @@ groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 class VoiceAgentHandler(BaseHTTPRequestHandler):
     
+    """インメモリでのあいまい検索処理（使用例を利用）"""
     def search_intent(self, query: str) -> dict:
-        """インメモリでのあいまい検索処理"""
-        keys = list(INTENTS_DB.keys())
-        matches = get_close_matches(query, keys, n=1, cutoff=0.3)
-        if matches:
-            return INTENTS_DB[matches[0]]
+        for intent_key, intent_data in INTENTS_DB.items():
+            for example in intent_data.get("usage_example", []):
+                # ユーザーのクエリが使用例に含まれているか、使用例がクエリに含まれているか判定
+                if example in query or query in example:
+                    return intent_data
         return {}
     
     # 1. ヘルスチェック・ブラウザアクセス用
