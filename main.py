@@ -92,7 +92,7 @@ class FileUtil:
         
         return {'in':in_file,'out':out_file}
     @staticmethod
-    def __rm_f(in_file, out_file):
+    def rm_f(in_file, out_file):
         # 一時ファイルの削除
         for f in [in_file, out_file]:
             if os.path.exists(f):
@@ -168,7 +168,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 self.wfile.write(response_json_str.encode('utf-8'))
 
                 # 一時ファイルの削除
-                FileUtil.__rm_f(in_file, out_file)
+                FileUtil.rm_f(in_file, out_file)
             
             except Exception as e:
                 print(f"❌ Server Error: {e}")
