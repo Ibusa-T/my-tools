@@ -272,8 +272,8 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                     extracted_parameters = json.loads(tool_call.function.arguments)
                 except:
                     print("エラーだよ〜〜〜")
-                if not ai_text:
-                    ai_text = "承知いたしました。"
+                
+                ai_text = "承知いたしました。"
 
             # AIの回答も履歴に追加
             history.append({"role": "assistant", "content": ai_text})
