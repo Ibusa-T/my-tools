@@ -53,3 +53,5 @@ python main.py
 -   **Endpoint**: `POST /voice`
 -   **Content-Type**: `audio/mpeg` または `audio/m4a`
 -   **Response**: `audio/mpeg` (AIの返答音声)
+
+
