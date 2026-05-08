@@ -69,6 +69,18 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 if example in query or query in example:
                     return intent_data
         return {}
+        # 1. ヘルスチェック・ブラウザアクセス用
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.end_headers()
+        self.wfile.write("Service is Running".encode('utf-8'))
+
+    # 2. Render等の監視サービス用
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html')
+        self.end_headers()
 
     def do_POST(self):
         if self.path == '/voice':
@@ -98,7 +110,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 print(f"❌ Server Error: {e}")
                 self.send_error(500, str(e))
-    
+
     async def process_ai(self, raw_pcm_data, history_json):
         try:
             history = json.loads(history_json)
