@@ -84,7 +84,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', 'text/html')
         self.end_headers()
-    
+
     def do_POST(self):
         if self.path == '/voice':
             try:
@@ -126,47 +126,45 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+    async def process_ai(self, audio_data, history_json):
+        try:
+            history = json.loads(history_json)
 
-        async def process_ai(self, audio_data, history_json):
-            try:
-                history = json.loads(history_json)
+            # A. Audio Data -> BytesIO (WhisperはM4Aを直接受け取れます)
+            audio_buffer = io.BytesIO(audio_data)
+            audio_buffer.name = "input.m4a" # 拡張子を明示するのがコツ
 
-                # A. Audio Data -> BytesIO (WhisperはM4Aを直接受け取れます)
-                audio_buffer = io.BytesIO(audio_data)
-                audio_buffer.name = "input.m4a" # 拡張子を明示するのがコツ
+            # B. Whisper Transcription (修正箇所)
+            # waveモジュールを使わず、bufferをそのまま渡します
+            transcription = groq_client.audio.transcriptions.create(
+                file=audio_buffer,
+                model="whisper-large-v3-turbo",
+                language="ja"
+            )
+            user_text = transcription.text
 
-                # B. Whisper Transcription (修正箇所)
-                # waveモジュールを使わず、bufferをそのまま渡します
-                transcription = groq_client.audio.transcriptions.create(
-                    file=audio_buffer,
-                    model="whisper-large-v3-turbo",
-                    language="ja"
-                )
-                user_text = transcription.text
+            # --- C, D (LLM推論) は元のロジックを維持 ---
+            # ... (中略) ...
 
-                # --- C, D (LLM推論) は元のロジックを維持 ---
-                # ... (中略) ...
-
-                # E. Edge TTS
-                tts_buffer = io.BytesIO()
-                communicate = edge_tts.Communicate(ai_text, "ja-JP-NanamiNeural")
-                async for chunk in communicate.stream():
-                    if chunk["type"] == "audio":
-                        tts_buffer.write(chunk["data"])
-                
-                audio_b64 = base64.b64encode(tts_buffer.getvalue()).decode('utf-8')
-                
-                return json.dumps({
-                    "user_text": user_text,
-                    "ai_text": ai_text,
-                    "audio_data": audio_b64,
-                    "swift_action": swift_action,
-                    "parameters": extracted_parameters
-                })
-            except Exception as e:
-                print(f"❌ process_ai error: {e}")
-                return json.dumps({"user_text": "Error", "ai_text": str(e), "audio_data": ""})
-
+            # E. Edge TTS
+            tts_buffer = io.BytesIO()
+            communicate = edge_tts.Communicate(ai_text, "ja-JP-NanamiNeural")
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    tts_buffer.write(chunk["data"])
+            
+            audio_b64 = base64.b64encode(tts_buffer.getvalue()).decode('utf-8')
+            
+            return json.dumps({
+                "user_text": user_text,
+                "ai_text": ai_text,
+                "audio_data": audio_b64,
+                "swift_action": swift_action,
+                "parameters": extracted_parameters
+            })
+        except Exception as e:
+            print(f"❌ process_ai error: {e}")
+            return json.dumps({"user_text": "Error", "ai_text": str(e), "audio_data": ""})
 def run_server():
     port = int(os.environ.get("PORT", 8000))
     server_address = ('', port)
