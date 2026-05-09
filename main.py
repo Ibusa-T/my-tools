@@ -142,10 +142,80 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 language="ja"
             )
             user_text = transcription.text
+            # --- C. Intent Search & Tool Setup ---
+            # ユーザーの発言からインテント（やりたいこと）を簡易検索
+            matched_intent = self.search_intent(user_text)
+            tools = []
+            
+            # インテントが見つかった場合、LLMに渡す「ツール（Function）」を定義
+            if matched_intent:
+                properties = {
+                    p["name"]: {
+                        "type": "string", 
+                        "description": p.get("description", "")
+                    } for p in matched_intent.get("parameters", [])
+                }
+                tools = [{
+                    "type": "function",
+                    "function": {
+                        "name": matched_intent.get("swift_action", "IntentAction"),
+                        "description": matched_intent.get("summary", ""),
+                        "parameters": {
+                            "type": "object", 
+                            "properties": properties,
+                            "required": list(properties.keys()) # 全て必須パラメータとして指定
+                        }
+                    }
+                }]
 
-            # --- C, D (LLM推論) は元のロジックを維持 ---
-            # ... (中略) ...
+            # --- D. Llama 推論 (LLM Processing) ---
+            messages = [{"role": "system", "content": system_prompt}]
+            messages.extend(history)
+            messages.append({"role": "user", "content": user_text})
 
+            # Groq APIへのリクエスト設定
+            chat_kwargs = {
+                "model": "llama-3.3-70b-versatile",
+                "messages": messages,
+                "temperature": 0.5, # 応答の安定性のために少し低めに設定
+                "max_tokens": 512
+            }
+            
+            # ツールが定義されている場合のみ、ツール設定を追加
+            if tools:
+                chat_kwargs.update({
+                    "tools": tools,
+                    "tool_choice": "auto"
+                })
+
+            # LLMの実行
+            chat_completion = groq_client.chat.completions.create(**chat_kwargs)
+            message = chat_completion.choices[0].message
+            
+            ai_text = message.content or ""
+            swift_action = ""
+            extracted_parameters = {}
+
+            # LLMが「ツールを使う必要がある」と判断した場合の処理
+            if message.tool_calls:
+                tool_call = message.tool_calls[0]
+                swift_action = tool_call.function.name # Swift側のIntent名
+                
+                # 引数のJSON文字列をパースして辞書型に変換
+                try:
+                    extracted_parameters = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    extracted_parameters = {}
+                
+                # アクション実行時の固定返答（必要に応じてLLMに生成させることも可能）
+                if not ai_text:
+                    ai_text = "承知いたしました。実行しますね。"
+
+            # 履歴の更新（今回のやり取りを保存）
+            history.append({"role": "user", "content": user_text})
+            history.append({"role": "assistant", "content": ai_text})
+
+            # --- E. Edge TTS へ続く ---
             # E. Edge TTS
             tts_buffer = io.BytesIO()
             communicate = edge_tts.Communicate(ai_text, "ja-JP-NanamiNeural")
