@@ -38,24 +38,50 @@ system_prompt = get_system_prompt()
 # --- 2. INTENTS_DB (RAG/Function Calling用) ---
 # 元のファイルから継承
 INTENTS_DB = {
-    "playMusic": {
-        "summary": "ミュージックアプリで楽曲やプレイリストを再生する",
+    "LocationIntent": {
+        "summary": "現在地や周辺の施設などの位置情報を確認・検索する",
         "parameters": [
-            {"name": "song_name", "type": "string", "description": "再生したい曲名"},
-            {"name": "artist_name", "type": "string", "description": "再生したいアーティスト名"},
-            {"name": "playlist_name", "type": "string", "description": "再生したいプレイリスト名"}
+            {"name": "query", "type": "String", "description": "検索したい場所や施設名（例：ここから一番近い、近くのコンビニ）"}
         ],
-        "usage_example": ["音楽をかけて", "再生して", "流して"],
-        "swift_action": "PlayMusicIntent"
+        "usage_example": ["ここから一番近い", "どこ", "近くの"],
+        "swift_action": "LocationIntent"
     },
-    "setReminder": {
-        "summary": "リマインダーに予定を追加する",
+    "CalendarIntent": {
+        "summary": "カレンダーからリマインダの予定を確認する",
         "parameters": [
-            {"name": "title", "type": "string", "description": "内容"},
-            {"name": "target_time", "type": "string", "description": "時刻"}
+            {"name": "time_frame", "type": "String", "description": "確認したい期間（今日の予定、今週の予定など）"}
         ],
-        "usage_example": ["リマインダーに予定を入れて"],
-        "swift_action": "SetReminderIntent"
+        "usage_example": ["今日の予定", "今週の予定", "今月の予定"],
+        "swift_action": "CalendarIntent"
+    },
+    "ReminderIntent": {
+        "summary": "リマインダーに予定を追加、削除、または編集する",
+        "parameters": [
+            {"name": "action_type", "type": "String", "description": "実行する操作（追加、削除、編集）"},
+            {"name": "title", "type": "String", "description": "予定の内容"},
+            {"name": "target_time", "type": "String", "description": "時刻"}
+        ],
+        "usage_example": ["リマインダーに予定を入れて", "予定を削除して", "予定を編集して"],
+        "swift_action": "ReminderIntent"
+    },
+    "HealthcareIntent": {
+        "summary": "ヘルスケアのデータ（歩数や心拍数）を確認する",
+        "parameters": [
+            {"name": "data_type", "type": "String", "description": "確認したいデータ（歩数、心拍数など）"}
+        ],
+        "usage_example": ["歩数を確認", "心拍数を確認"],
+        "swift_action": "HealthcareIntent"
+    },
+    "MusicIntent": {
+        "summary": "ミュージックアプリで楽曲やプレイリストを再生、または停止する",
+        "parameters": [
+            {"name": "action_type", "type": "String", "description": "実行する操作（再生、停止）"},
+            {"name": "song_name", "type": "String", "description": "再生したい曲名"},
+            {"name": "artist_name", "type": "String", "description": "再生したいアーティスト名"},
+            {"name": "playlist_name", "type": "String", "description": "再生したいプレイリスト名"}
+        ],
+        "usage_example": ["音楽をかけて", "再生して", "流して", "音楽を止めて"],
+        "swift_action": "MusicIntent"
     }
 }
 
@@ -63,15 +89,68 @@ INTENTS_DB = {
 load_dotenv()
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-class VoiceAgentHandler(BaseHTTPRequestHandler):
-    
-    def search_intent(self, query: str) -> dict:
+
+
+class AnalyzerUtil:
+    """
+    request-parameter analysis utility.
+    """
+    @staticmethod
+    def multipart_field_storage(headers,rfile):
+        ctype, pdict = cgi.parse_header(headers['content-type'])
+        if ctype == 'multipart/form-data':
+            if isinstance(pdict['boundary'], str):
+                pdict['boundary'] = pdict['boundary'].encode('utf-8')
+            return cgi.FieldStorage(fp=rfile,headers=headers,environ={'REQUEST_METHOD': 'POST'})
+        else:
+            raise ValueError("Content-Type is not multipart/form-data")
+    @staticmethod
+    def search_intent(query: str) -> dict:
         """インメモリでのあいまい検索処理"""
         for intent_key, intent_data in INTENTS_DB.items():
             for example in intent_data.get("usage_example", []):
                 if example in query or query in example:
                     return intent_data
         return {}
+
+    """
+    Audio utilities.
+    """
+    @staticmethod
+    def whisper_transcription(audio_buffer):
+        return groq_client.audio.transcriptions.create(
+                file=audio_buffer,
+                model="whisper-large-v3-turbo",
+                language="ja"
+        )
+    
+    """
+    System intent tools.
+    """
+    @staticmethod
+    def __intent_getproperties(matched_intent):
+        return {p["name"]: {"type": p.get("type", "String").lower()
+        , "description": p.get("description", "")} for p in matched_intent.get("parameters", [])}
+
+    @staticmethod
+    def intent_gettool(matched_intent):
+        properties = AnalyzerUtil.__intent_getproperties(matched_intent)
+        return [{
+                    "type": "function",
+                    "function": {
+                        "name": matched_intent.get("swift_action", "IntentAction"),
+                        "description": matched_intent.get("summary", ""),
+                        "parameters": {
+                            "type": "object", 
+                            "properties": properties,
+                            "required": list(properties.keys()) # 全て必須パラメータとして指定
+                        }
+                    }
+                }]
+    
+
+
+class VoiceAgentHandler(BaseHTTPRequestHandler):
         # 1. ヘルスチェック・ブラウザアクセス用
     def do_GET(self):
         self.send_response(200)
@@ -89,18 +168,8 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
         if self.path == '/voice':
             try:
                 # 1. マルチパートデータの解析
-                ctype, pdict = cgi.parse_header(self.headers['content-type'])
-                if ctype == 'multipart/form-data':
-                    # pdict['boundary'] を bytes に変換する必要がある場合があるため修正
-                    if isinstance(pdict['boundary'], str):
-                        pdict['boundary'] = pdict['boundary'].encode('utf-8')
-                    
-                    form = cgi.FieldStorage(
-                        fp=self.rfile,
-                        headers=self.headers,
-                        environ={'REQUEST_METHOD': 'POST'}
-                    )
-             
+
+                form = AnalyzerUtil.multipart_field_storage(self.headers,self.rfile)
                 history_json = form.getvalue("history") or "[]"
                 audio_field = form["audio"]
                 
@@ -110,6 +179,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 # 修正: raw_pcm ではなく audio_data (M4A) を渡す
+                
                 response_json_str = loop.run_until_complete(
                     self.process_ai(audio_data, history_json)
                 )
@@ -126,6 +196,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+    
     async def process_ai(self, audio_data, history_json):
         try:
             history = json.loads(history_json)
@@ -136,38 +207,16 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
 
             # B. Whisper Transcription (修正箇所)
             # waveモジュールを使わず、bufferをそのまま渡します
-            transcription = groq_client.audio.transcriptions.create(
-                file=audio_buffer,
-                model="whisper-large-v3-turbo",
-                language="ja"
-            )
-            user_text = transcription.text
+            user_text = AnalyzerUtil.whisper_transcription(audio_buffer).text
             # --- C. Intent Search & Tool Setup ---
             # ユーザーの発言からインテント（やりたいこと）を簡易検索
-            matched_intent = self.search_intent(user_text)
+            matched_intent = AnalyzerUtil.search_intent(user_text)
             tools = []
             
             # インテントが見つかった場合、LLMに渡す「ツール（Function）」を定義
             if matched_intent:
-                properties = {
-                    p["name"]: {
-                        "type": "string", 
-                        "description": p.get("description", "")
-                    } for p in matched_intent.get("parameters", [])
-                }
-                tools = [{
-                    "type": "function",
-                    "function": {
-                        "name": matched_intent.get("swift_action", "IntentAction"),
-                        "description": matched_intent.get("summary", ""),
-                        "parameters": {
-                            "type": "object", 
-                            "properties": properties,
-                            "required": list(properties.keys()) # 全て必須パラメータとして指定
-                        }
-                    }
-                }]
-
+                tools = AnalyzerUtil.intent_gettool(matched_intent)
+           
             # --- D. Llama 推論 (LLM Processing) ---
             messages = [{"role": "system", "content": system_prompt}]
             messages.extend(history)
@@ -235,6 +284,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
         except Exception as e:
             print(f"❌ process_ai error: {e}")
             return json.dumps({"user_text": "Error", "ai_text": str(e), "audio_data": ""})
+
 def run_server():
     port = int(os.environ.get("PORT", 8000))
     server_address = ('', port)
