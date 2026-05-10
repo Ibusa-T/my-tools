@@ -3,3 +3,10 @@
 env
 **/.env
 **/env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.python-version
