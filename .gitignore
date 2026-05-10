@@ -10,3 +10,6 @@ __pycache__/
 *$py.class
 .venv/
 .python-version
+
+# Markdown
+*.md
