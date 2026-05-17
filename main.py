@@ -3,10 +3,12 @@ import io
 import asyncio
 import json
 import base64
-import wave
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
 from groq import Groq
+# Google の新世代公式SDKをインポート
+from google import genai
+from google.genai import types
 import edge_tts
 import cgi
 
@@ -25,9 +27,10 @@ BEHAVIOR_LOGIC = """
 -「独自の視点」から新しい提案
 
 # 相手が明確に以下のキーワードを使ったとき、「本日の会話は以上です。お疲れ様でした。」と一言添えて終了してください。
-- 「もう大丈夫」
-- 「今日は終わり」
-
+- 「終わり」
+- 「終了」
+- 「また明日」
+- 「もう良いよ」
 """
 
 def get_system_prompt():
@@ -36,7 +39,6 @@ def get_system_prompt():
 system_prompt = get_system_prompt()
 
 # --- 2. INTENTS_DB (RAG/Function Calling用) ---
-# 元のファイルから継承
 INTENTS_DB = {
     "LocationIntent": {
         "summary": "現在地や周辺の施設などの位置情報を確認・検索する",
@@ -85,35 +87,35 @@ INTENTS_DB = {
     }
 }
 
-# --- 3. サーバーハンドラー ---
+# --- 3. クライアント初期化 ---
 load_dotenv()
+
+# 音声認識(STT)は引き続き爆速のGroq(Whisper)を維持
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
+# 思考エンジン(LLM)はGoogle公式クライアントを生成（.env の GEMINI_API_KEY を自動参照）
+google_client = genai.Client()
+
+
 class AnalyzerUtil:
-    """
-    request-parameter analysis utility.
-    """
     @staticmethod
-    def multipart_field_storage(headers,rfile):
+    def multipart_field_storage(headers, rfile):
         ctype, pdict = cgi.parse_header(headers['content-type'])
         if ctype == 'multipart/form-data':
             if isinstance(pdict['boundary'], str):
                 pdict['boundary'] = pdict['boundary'].encode('utf-8')
-            return cgi.FieldStorage(fp=rfile,headers=headers,environ={'REQUEST_METHOD': 'POST'})
+            return cgi.FieldStorage(fp=rfile, headers=headers, environ={'REQUEST_METHOD': 'POST'})
         else:
             raise ValueError("Content-Type is not multipart/form-data")
+
     @staticmethod
     def search_intent(query: str) -> dict:
-        """インメモリでのあいまい検索処理"""
         for intent_key, intent_data in INTENTS_DB.items():
             for example in intent_data.get("usage_example", []):
                 if example in query or query in example:
                     return intent_data
         return {}
 
-    """
-    Audio utilities.
-    """
     @staticmethod
     def whisper_transcription(audio_buffer):
         return groq_client.audio.transcriptions.create(
@@ -122,41 +124,43 @@ class AnalyzerUtil:
                 language="ja"
         )
     
-    """
-    System intent tools.
-    """
     @staticmethod
-    def __intent_getproperties(matched_intent):
-        return {p["name"]: {"type": p.get("type", "String").lower()
-        , "description": p.get("description", "")} for p in matched_intent.get("parameters", [])}
-
-    @staticmethod
-    def intent_gettool(matched_intent):
-        properties = AnalyzerUtil.__intent_getproperties(matched_intent)
-        return [{
-                    "type": "function",
-                    "function": {
-                        "name": matched_intent.get("swift_action", "IntentAction"),
-                        "description": matched_intent.get("summary", ""),
-                        "parameters": {
-                            "type": "object", 
-                            "properties": properties,
-                            "required": list(properties.keys()) # 全て必須パラメータとして指定
-                        }
-                    }
-                }]
-    
+    def gemma_intent_tool(matched_intent):
+        """INTENTS_DBの定義をGoogle SDKのTool(Function Calling)形式に動的変換"""
+        properties = {}
+        required_fields = []
+        
+        for p in matched_intent.get("parameters", []):
+            p_name = p["name"]
+            properties[p_name] = types.Schema(
+                type=types.Type.STRING,  # 引数は一律String型として定義
+                description=p.get("description", "")
+            )
+            required_fields.append(p_name)
+            
+        # Google SDK専用のFunction定義構造体をパッケージングして返却
+        return types.Tool(
+            function_declarations=[
+                types.FunctionDeclaration(
+                    name=matched_intent.get("swift_action", "IntentAction"),
+                    description=matched_intent.get("summary", ""),
+                    parameters=types.Schema(
+                        type=types.Type.OBJECT,
+                        properties=properties,
+                        required=required_fields
+                    )
+                )
+            ]
+        )
 
 
 class VoiceAgentHandler(BaseHTTPRequestHandler):
-        # 1. ヘルスチェック・ブラウザアクセス用
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.end_headers()
         self.wfile.write("Service is Running".encode('utf-8'))
 
-    # 2. Render等の監視サービス用
     def do_HEAD(self):
         self.send_response(200)
         self.send_header('Content-Type', 'text/html')
@@ -165,19 +169,13 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == '/voice':
             try:
-                # 1. マルチパートデータの解析
-
-                form = AnalyzerUtil.multipart_field_storage(self.headers,self.rfile)
+                form = AnalyzerUtil.multipart_field_storage(self.headers, self.rfile)
                 history_json = form.getvalue("history") or "[]"
                 audio_field = form["audio"]
-                
-                # iOSから送られてきたM4Aデータそのもの
                 audio_data = audio_field.file.read()
 
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                # 修正: raw_pcm ではなく audio_data (M4A) を渡す
-                
                 response_json_str = loop.run_until_complete(
                     self.process_ai(audio_data, history_json)
                 )
@@ -190,7 +188,6 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             
             except Exception as e:
                 print(f"❌ Server Error: {e}")
-                # エラー詳細をJSONで返すとiOS側でデバッグしやすい
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
@@ -199,71 +196,69 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
         try:
             history = json.loads(history_json)
 
-            # A. Audio Data -> BytesIO (WhisperはM4Aを直接受け取れます)
             audio_buffer = io.BytesIO(audio_data)
-            audio_buffer.name = "input.m4a" # 拡張子を明示するのがコツ
+            audio_buffer.name = "input.m4a"
 
-            # B. Whisper Transcription (修正箇所)
-            # waveモジュールを使わず、bufferをそのまま渡します
+            # --- B. Whisper Transcription (Groqで爆速テキスト化) ---
             user_text = AnalyzerUtil.whisper_transcription(audio_buffer).text
+            
             # --- C. Intent Search & Tool Setup ---
-            # ユーザーの発言からインテント（やりたいこと）を簡易検索
             matched_intent = AnalyzerUtil.search_intent(user_text)
-            tools = []
+            google_tools = None
             
-            # インテントが見つかった場合、LLMに渡す「ツール（Function）」を定義
             if matched_intent:
-                tools = AnalyzerUtil.intent_gettool(matched_intent)
+                # Google SDK形式のFunction Calling定義を生成
+                google_tools = [AnalyzerUtil.gemma_intent_tool(matched_intent)]
            
-            # --- D. Llama 推論 (LLM Processing) ---
-            messages = [{"role": "system", "content": system_prompt}]
-            messages.extend(history)
-            messages.append({"role": "user", "content": user_text})
+            # --- D. Gemma 4 推論 (Google AI Studio 直通) ---
+            # 過去の会話履歴（ステートレスなテキストログ）をGoogle用のオブジェクト配列にシリアライズ
+            contents = []
+            for msg in history:
+                contents.append(
+                    types.Content(
+                        role="user" if msg["role"] == "user" else "model",
+                        parts=[types.Part.from_text(text=msg["content"])]
+                    )
+                )
+            # 今回のユーザー最新発言を追加（パケットの積み増し）
+            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=user_text)]))
 
-            # Groq APIへのリクエスト設定
-            chat_kwargs = {
-                "model": "llama-3.3-70b-versatile",
-                "messages": messages,
-                "temperature": 0.5, # 応答の安定性のために少し低めに設定
-                "max_tokens": 512
-            }
-            
-            # ツールが定義されている場合のみ、ツール設定を追加
-            if tools:
-                chat_kwargs.update({
-                    "tools": tools,
-                    "tool_choice": "auto"
-                })
+            # Gemma 4 実行コンフィグの設定（システム指示・パラメータ・ツールを統合）
+            config = types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.2,  # 意図予測を安定させるために少し低めに調整
+                tools=google_tools if google_tools else None
+            )
 
-            # LLMの実行
-            chat_completion = groq_client.chat.completions.create(**chat_kwargs)
-            message = chat_completion.choices[0].message
+            # Gemma 4 のコンテスト本命モデル(gemma-4-31b-it)をキック
+            response = google_client.models.generate_content(
+                model='gemma-4-31b-it',
+                contents=contents,
+                config=config
+            )
             
-            ai_text = message.content or ""
+            ai_text = response.text or ""
             swift_action = ""
             extracted_parameters = {}
 
-            # LLMが「ツールを使う必要がある」と判断した場合の処理
-            if message.tool_calls:
-                tool_call = message.tool_calls[0]
-                swift_action = tool_call.function.name # Swift側のIntent名
+            # Gemma 4 がインテント実行（Function Calling）を決定した場合のデコード処理
+            if response.function_calls:
+                tool_call = response.function_calls[0]
+                swift_action = tool_call.name  # Swift側のIntentクラス名とマッピング
                 
-                # 引数のJSON文字列をパースして辞書型に変換
-                try:
-                    extracted_parameters = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    extracted_parameters = {}
+                # Googleの最新SDKは、引数を最初から綺麗なPythonの辞書型(dict)にパースしてくれています
+                if tool_call.args:
+                    extracted_parameters = dict(tool_call.args)
                 
-                # アクション実行時の固定返答（必要に応じてLLMに生成させることも可能）
+                # インテント実行時にテキストが空なら、固定の初期応答をセット
                 if not ai_text:
                     ai_text = "承知いたしました。実行しますね。"
 
-            # 履歴の更新（今回のやり取りを保存）
+            # 会話履歴配列をアップデートして同期
             history.append({"role": "user", "content": user_text})
             history.append({"role": "assistant", "content": ai_text})
 
-            # --- E. Edge TTS へ続く ---
-            # E. Edge TTS
+            # --- E. Edge TTS (音声合成) ---
             tts_buffer = io.BytesIO()
             communicate = edge_tts.Communicate(ai_text, "ja-JP-NanamiNeural")
             async for chunk in communicate.stream():
@@ -272,6 +267,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             
             audio_b64 = base64.b64encode(tts_buffer.getvalue()).decode('utf-8')
             
+            # Swift（フロントエンド）がパースしやすい綺麗なインターフェースでレスポンスを返却
             return json.dumps({
                 "user_text": user_text,
                 "ai_text": ai_text,
@@ -283,12 +279,14 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             print(f"❌ process_ai error: {e}")
             return json.dumps({"user_text": "Error", "ai_text": str(e), "audio_data": ""})
 
+
 def run_server():
     port = int(os.environ.get("PORT", 8000))
     server_address = ('', port)
     httpd = HTTPServer(server_address, VoiceAgentHandler)
-    print(f"🚀 Server running on port {port} (Full Memory Mode)")
+    print(f"🚀 Server running on port {port} (Gemma 4 Pipeline Activated)")
     httpd.serve_forever()
+
 
 if __name__ == "__main__":
     run_server()

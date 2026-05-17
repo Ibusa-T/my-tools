@@ -3,4 +3,5 @@ groq
 edge-tts
 Pillow
 ImageHash
- legacy-cgi
+legacy-cgi
+google-genai
