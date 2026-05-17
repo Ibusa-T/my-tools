@@ -138,7 +138,6 @@ class AnalyzerUtil:
             )
             required_fields.append(p_name)
             
-        # Google SDK専用のFunction定義構造体をパッケージングして返却
         return types.Tool(
             function_declarations=[
                 types.FunctionDeclaration(
@@ -199,7 +198,7 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             audio_buffer = io.BytesIO(audio_data)
             audio_buffer.name = "input.m4a"
 
-            # --- B. Whisper Transcription (Groqで爆速テキスト化) ---
+            # --- B. Whisper Transcription ---
             user_text = AnalyzerUtil.whisper_transcription(audio_buffer).text
             
             # --- C. Intent Search & Tool Setup ---
@@ -207,11 +206,9 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             google_tools = None
             
             if matched_intent:
-                # Google SDK形式のFunction Calling定義を生成
                 google_tools = [AnalyzerUtil.gemma_intent_tool(matched_intent)]
            
-            # --- D. Gemma 4 推論 (Google AI Studio 直通) ---
-            # 過去の会話履歴（ステートレスなテキストログ）をGoogle用のオブジェクト配列にシリアライズ
+            # --- D. Gemma 4 推論 ---
             contents = []
             for msg in history:
                 contents.append(
@@ -220,17 +217,14 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
                         parts=[types.Part.from_text(text=msg["content"])]
                     )
                 )
-            # 今回のユーザー最新発言を追加（パケットの積み増し）
             contents.append(types.Content(role="user", parts=[types.Part.from_text(text=user_text)]))
 
-            # Gemma 4 実行コンフィグの設定（システム指示・パラメータ・ツールを統合）
             config = types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                temperature=0.2,  # 意図予測を安定させるために少し低めに調整
+                temperature=0.2,
                 tools=google_tools if google_tools else None
             )
 
-            # Gemma 4 のコンテスト本命モデル(gemma-4-31b-it)をキック
             response = google_client.models.generate_content(
                 model='gemma-4-31b-it',
                 contents=contents,
@@ -241,20 +235,25 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             swift_action = ""
             extracted_parameters = {}
 
-            # Gemma 4 がインテント実行（Function Calling）を決定した場合のデコード処理
             if response.function_calls:
                 tool_call = response.function_calls[0]
-                swift_action = tool_call.name  # Swift側のIntentクラス名とマッピング
+                swift_action = tool_call.name
                 
-                # Googleの最新SDKは、引数を最初から綺麗なPythonの辞書型(dict)にパースしてくれています
                 if tool_call.args:
-                    extracted_parameters = dict(tool_call.args)
+                    # 💡【重要デバッグポイント】
+                    # Gemmaがパラメータの値を配列（例：["今日"]）や別のオブジェクトとして返してきた場合、
+                    # Swift側の [String: String] のデコードが失敗してクラッシュ（解析エラー）するため、
+                    # すべての値を文字列型（String）に強制変換・フラット化してSwiftへパスします。
+                    for k, v in dict(tool_call.args).items():
+                        if isinstance(v, list):
+                            extracted_parameters[k] = str(v[0]) if v else ""
+                        else:
+                            extracted_parameters[k] = str(v)
                 
-                # インテント実行時にテキストが空なら、固定の初期応答をセット
                 if not ai_text:
                     ai_text = "承知いたしました。実行しますね。"
 
-            # 会話履歴配列をアップデートして同期
+            # 履歴の更新
             history.append({"role": "user", "content": user_text})
             history.append({"role": "assistant", "content": ai_text})
 
@@ -267,7 +266,6 @@ class VoiceAgentHandler(BaseHTTPRequestHandler):
             
             audio_b64 = base64.b64encode(tts_buffer.getvalue()).decode('utf-8')
             
-            # Swift（フロントエンド）がパースしやすい綺麗なインターフェースでレスポンスを返却
             return json.dumps({
                 "user_text": user_text,
                 "ai_text": ai_text,
